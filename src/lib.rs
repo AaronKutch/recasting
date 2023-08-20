@@ -1,24 +1,16 @@
 //! Enable the "std" feature for some extra impls
 
 #![cfg_attr(not(feature = "std"), no_std)]
+
 use core::num::{
     NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize, NonZeroU128,
     NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
 };
 extern crate alloc;
 
+/// A trait implemented for structures that have `Item`s that should be
+/// `Recast`ed by a `Recaster`.
 ///
-/// Most end users will get a `Recaster` from some method on a collection that
-/// can act as the reference, see the `Recast` documentation for that. Here is
-/// an example of actually implementing a `Recaster`.
-pub trait Recaster {
-    type Item;
-
-    /// Recasts an `item` based off of `self`. Returns an `Err` with `item` if
-    /// it could not be handled.
-    fn recast_item(&self, item: &mut Self::Item) -> Result<(), Self::Item>;
-}
-
 /// ```
 /// // using `Recaster` and `Recast` on the
 /// // `Arena` from the `triple_arena` crate
@@ -358,5 +350,124 @@ impl<I, K, V: Recast<I>> Recast<I> for std::collections::BTreeMap<K, V> {
             t.recast(recaster)?;
         }
         Ok(())
+    }
+}
+
+/// A trait implemented for structures that can act as a `Recaster` in
+/// `Recast`ing `Item`s.
+///
+/// Most end users will get a `Recaster` from some method on a collection or
+/// some free function, see the `Recast` documentation for that. Here is
+/// an example of actually implementing a `Recaster`.
+///
+/// ```
+/// use std::collections::HashMap;
+///
+/// use recasting::{Recast, Recaster};
+///
+/// // there is an existing impl for `HashMap`, we will use a wrapper
+/// struct MyRecaster(HashMap<i64, i64>);
+///
+/// impl Recaster for MyRecaster {
+///     type Item = i64;
+///
+///     fn recast_item(&self, item: &mut Self::Item) -> Result<(), Self::Item> {
+///         if let Some(res) = self.0.get(item) {
+///             *item = *res;
+///             Ok(())
+///         } else {
+///             // alternatively, we could make this a no-op or use
+///             // other behavior depending on our intentions
+///             Err(*item)
+///         }
+///     }
+/// }
+///
+/// struct Structure {
+///     keyed_map: HashMap<i64, String>,
+/// }
+///
+/// impl Structure {
+///     fn insert(&mut self, i: i64, s: &str) {
+///         self.keyed_map.insert(i, s.to_owned());
+///     }
+///
+///     fn get(&self, i: i64) -> Option<&str> {
+///         self.keyed_map.get(&i).map(|s| s.as_str())
+///     }
+///
+///     // some arbitrary key remapping we are choosing for an example
+///     fn sub42<F: FnMut(i64, i64)>(&mut self, mut map: F) {
+///         let mut new = HashMap::new();
+///         for (key, val) in self.keyed_map.drain() {
+///             new.insert(key - 42, val);
+///             // closure through which we can
+///             // see the old and new keys
+///             map(key, key - 42);
+///         }
+///         self.keyed_map = new;
+///     }
+///
+///     fn sub42_recaster(&mut self) -> MyRecaster {
+///         let mut map = HashMap::new();
+///         self.sub42(|old, new| {
+///             map.insert(old, new);
+///         });
+///         MyRecaster(map)
+///     }
+/// }
+///
+/// let mut structure = Structure {
+///     keyed_map: HashMap::new(),
+/// };
+///
+/// let mut keys = vec![0, 1337, -10];
+/// structure.insert(keys[0], "test");
+/// structure.insert(keys[1], "hello");
+/// structure.insert(keys[2], "world");
+///
+/// let recaster = structure.sub42_recaster();
+/// // this goes through the `Recast` impl for `Vec` and calls
+/// // `Recast<i64>` with `<MyRecaster as Recaster>::recast_item`
+/// keys.recast(&recaster).unwrap();
+///
+/// assert_eq!(&keys, &[-42, 1295, -52]);
+/// assert_eq!(structure.get(keys[0]).unwrap(), "test");
+/// assert_eq!(structure.get(keys[1]).unwrap(), "hello");
+/// assert_eq!(structure.get(keys[2]).unwrap(), "world");
+/// ```
+pub trait Recaster {
+    type Item;
+
+    /// Recasts an `item` based off of `self`. Returns an `Err` with `item` if
+    /// it could not be handled.
+    fn recast_item(&self, item: &mut Self::Item) -> Result<(), Self::Item>;
+}
+
+#[cfg(feature = "std")]
+impl<K: PartialEq + Eq + core::hash::Hash + Clone> Recaster for std::collections::HashMap<K, K> {
+    type Item = K;
+
+    fn recast_item(&self, item: &mut Self::Item) -> Result<(), Self::Item> {
+        if let Some(res) = self.get(item) {
+            *item = res.clone();
+            Ok(())
+        } else {
+            Err(item.clone())
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<K: std::cmp::Ord + Clone> Recaster for std::collections::BTreeMap<K, K> {
+    type Item = K;
+
+    fn recast_item(&self, item: &mut Self::Item) -> Result<(), Self::Item> {
+        if let Some(res) = self.get(item) {
+            *item = res.clone();
+            Ok(())
+        } else {
+            Err(item.clone())
+        }
     }
 }

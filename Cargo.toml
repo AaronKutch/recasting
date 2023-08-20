@@ -12,6 +12,7 @@ keywords = ["recast", "translate", "no_std"]
 categories = ["memory-management", "data-structures", "no-std"]
 
 [features]
+default = []
 std = []
 
 [dev-dependencies]
