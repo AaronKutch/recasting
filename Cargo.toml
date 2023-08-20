@@ -16,4 +16,5 @@ default = []
 std = []
 
 [dev-dependencies]
-triple_arena = { path = "../triple_arena/triple_arena" }
+#triple_arena = { path = "../triple_arena/triple_arena" }
+#triple_arena = "0.11"
