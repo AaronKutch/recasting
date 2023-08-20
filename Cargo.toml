@@ -1,0 +1,18 @@
+[package]
+name = "recasting"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aaron Kutch <aaronkutch@att.net>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/AaronKutch/recasting"
+documentation = "https://docs.rs/recasting"
+description = "traits for one-to-one recasting of values in data structures"
+keywords = ["recast", "translate", "no_std"]
+categories = ["memory-management", "data-structures", "no-std"]
+
+[features]
+std = []
+
+[dev-dependencies]
+triple_arena = { path = "../triple_arena/triple_arena" }
