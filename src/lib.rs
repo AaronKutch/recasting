@@ -14,8 +14,7 @@ extern crate alloc;
 /// ```
 /// // using `Recaster` and `Recast` on the
 /// // `Arena` from the `triple_arena` crate
-/// use recasting::{Recaster, Recast};
-/// use triple_arena::{Arena, Ptr, ptr_struct};
+/// use triple_arena::{Arena, Ptr, ptr_struct, Recaster, Recast};
 ///
 /// ptr_struct!(P0; Q1);
 ///
