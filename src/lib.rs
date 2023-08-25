@@ -1,11 +1,16 @@
-//! Enable the "std" feature for some extra impls
+//! Note that there are "alloc" and "std" feature flags that can be turned off
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::num::{
-    NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize, NonZeroU128,
-    NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
+use core::{
+    marker::PhantomData,
+    num::{
+        NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize, NonZeroU128,
+        NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
+    },
 };
+
+#[cfg(feature = "alloc")]
 extern crate alloc;
 
 /// A trait implemented for structures that have `Item`s that should be
@@ -215,6 +220,15 @@ impl<I> Recast<I> for () {
     }
 }
 
+impl<I, T> Recast<I> for PhantomData<T> {
+    fn recast<R: Recaster<Item = I>>(
+        &mut self,
+        _recaster: &R,
+    ) -> Result<(), <R as Recaster>::Item> {
+        Ok(())
+    }
+}
+
 macro_rules! impl_self_recast {
     ($($t:ident)*) => {
         $(
@@ -234,9 +248,47 @@ impl_self_recast!(
     bool char f32 f64
 );
 
+impl<I, T: Recast<I>> Recast<I> for &mut T {
+    fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
+        Recast::recast(*self, recaster)?;
+        Ok(())
+    }
+}
+
+impl<I, T: Recast<I>> Recast<I> for core::cell::Cell<T> {
+    fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
+        Recast::recast(self.get_mut(), recaster)?;
+        Ok(())
+    }
+}
+
+impl<I, T: Recast<I>> Recast<I> for core::cell::RefCell<T> {
+    fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
+        Recast::recast(self.get_mut(), recaster)?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "alloc")]
 impl<I, T: Recast<I>> Recast<I> for alloc::boxed::Box<T> {
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         self.as_mut().recast(recaster)?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<I, T: Recast<I>> Recast<I> for alloc::rc::Rc<T> {
+    fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
+        Recast::recast(&mut alloc::rc::Rc::get_mut(self), recaster)?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<I, T: Recast<I>> Recast<I> for alloc::sync::Arc<T> {
+    fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
+        Recast::recast(&mut alloc::sync::Arc::get_mut(self), recaster)?;
         Ok(())
     }
 }
@@ -305,6 +357,7 @@ impl<I, T: Recast<I>> Recast<I> for [T] {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<I, T: Recast<I>> Recast<I> for alloc::vec::Vec<T> {
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         for t in self {
@@ -314,6 +367,7 @@ impl<I, T: Recast<I>> Recast<I> for alloc::vec::Vec<T> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<I, T: Recast<I>> Recast<I> for alloc::collections::VecDeque<T> {
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         for t in self {
@@ -323,6 +377,7 @@ impl<I, T: Recast<I>> Recast<I> for alloc::collections::VecDeque<T> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<I, T: Recast<I>> Recast<I> for alloc::collections::LinkedList<T> {
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         for t in self {

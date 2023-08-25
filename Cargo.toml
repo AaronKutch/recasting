@@ -12,8 +12,9 @@ keywords = ["recast", "translate", "no_std"]
 categories = ["memory-management", "data-structures", "no-std"]
 
 [features]
-default = []
-std = []
+default = ["std"]
+alloc = []
+std = ["alloc"]
 
 [dev-dependencies]
 #triple_arena = { path = "../triple_arena/triple_arena" }
