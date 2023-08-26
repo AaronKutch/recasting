@@ -16,40 +16,136 @@ extern crate alloc;
 /// A trait implemented for structures that have `Item`s that should be
 /// `Recast`ed by a `Recaster`.
 ///
+/// `Recast` was designed for structures with their own virtual address spaces,
+/// with the `Item`s being virtual addresses. For example, arenas from the
+/// `triple_arena` crate have entries that can be referenced by `Ptr`s. The
+/// `Ptr`s are indexes that must remain stable, otherwise copies of them will
+/// become invalid. The arenas from `triple_arena` have a problem where they
+/// should be compressed before being serialized, or else unused interior
+/// capacity will be forced upon the deserialized arenas in order to keep stable
+/// `Ptr`s. If the plain `compress_and_shrink` function is used, for example,
+/// the `Ptr` indexes are translated each to a new value, but all external
+/// `Ptr`s and the `Ptr`s in the entries would remain untranslated to the new
+/// mapping.
+///
 /// ```
-/// // using `Recaster` and `Recast` on the
-/// // `Arena` from the `triple_arena` crate
-/// use triple_arena::{Arena, Ptr, ptr_struct, Recaster, Recast};
+/// use triple_arena::{ptr_struct, Arena, Ptr};
+/// // the `P0` `Ptr` type
+/// ptr_struct!(P0);
 ///
-/// ptr_struct!(P0; Q1);
+/// let mut a: Arena<P0, (u64, Option<P0>)> = Arena::new();
+/// let p_1 = a.insert((1, None));
+/// let p_2 = a.insert((2, None));
+/// let p_7 = a.insert((7, None));
+/// let p_42 = a.insert((42, Some(p_7)));
+/// // create some unallocated internal entries
+/// a.remove(p_1).unwrap();
+/// a.remove(p_2).unwrap();
 ///
-/// // `triple_arena` defines `Ptr`s with `Ptr: Recast<Self>` and implements
-/// // this in the `ptr_struct` macro
-/// /*
-/// impl $crate::Recast<Self> for $struct_name {
-///     fn recast<R: $crate::Recaster<Item = Self>>(&mut self, recaster: &R)
-///         -> Result<(), <R as $crate::Recaster>::Item> {
-///         recaster.recast_item(self)
+/// assert_eq!(a.get(p_7), Some(&(7, None)));
+/// assert_eq!(a.get(p_42), Some(&(42, Some(p_7))));
+///
+/// // translate all the entries and their `Ptr` keys to new locations
+/// a.compress_and_shrink();
+///
+/// // the external copies `p_7` and `p_42` no longer work
+/// assert_eq!(a.get(p_7), None);
+/// assert_eq!(a.get(p_42), None);
+///
+/// // manually get the entry where 42 ends up
+/// let entry42: (u64, Option<P0>) = *a.vals().nth(1).unwrap();
+/// // the copy of `p_7` also was not changed even though it was inside
+/// // the arena, only the `Ptr`s by which entries are referenced has
+/// // changed, and anything inside the values is left unchanged
+/// assert_eq!(a.get(entry42.1.unwrap()), None);
+/// ```
+///
+/// We could use `compress_and_shrink_with` and correctly recast all `Ptr`s
+/// inside and outside the arena, but this quickly gets untenable as the
+/// complexity of the datastructure increases. Here is a version with `Recast`
+///
+/// ```
+/// use triple_arena::{ptr_struct, Arena, Ptr, Recaster, Recast};
+/// ptr_struct!(P0);
+///
+/// // the structs from `ptr_struct` automatically have `Recast<Self>` implemented
+///
+/// impl Recast<P0> for (u64, Option<P0>) {
+///     fn recast<R: Recaster<Item = P0>>(&mut self, recaster: &R)
+///         -> Result<(), <R as Recaster>::Item> {
+///         // this calls the impl of `Recast` for `Option<T>`, which calls
+///         // `Recast<Self> for P0`
+///         self.1.recast(recaster)?;
+///         // `self.0` does not have any `P0`s inside of it, but if there
+///         // are any fields with `P0`s they should also have `recast`
+///         // called
+///         Ok(())
 ///     }
 /// }
-/// */
 ///
-/// // An example some user structure. `Recast` was ultimately made for
-/// // complicated structures that can have the `Item` in various fields.
-/// // `Ptr`s are often used in structures that have references stored
-/// // in arbitrary ways that aren't tree-like like in Rust's `&` and
-/// // `&mut` references. This becomes a problem when we want to do
-/// // something like serialize the structure, because the capacity
-/// // of the `Arena`s would never decrease. Unless, we could
-/// // ergonomically map all the `Ptr`s to new values from
-/// // `Arena::compress_and_shrink`.
+/// let mut a: Arena<P0, (u64, Option<P0>)> = Arena::new();
+/// let p_1 = a.insert((1, None));
+/// let p_2 = a.insert((2, None));
+/// let mut p_7 = a.insert((7, None));
+/// let mut p_42 = a.insert((42, Some(p_7)));
+/// // create some unallocated internal entries
+/// a.remove(p_1).unwrap();
+/// a.remove(p_2).unwrap();
+///
+/// assert_eq!(a.get(p_7), Some(&(7, None)));
+/// assert_eq!(a.get(p_42), Some(&(42, Some(p_7))));
+///
+/// let old_p_7 = p_7;
+///
+/// // translate all the entries and their `Ptr` keys to new locations,
+/// // this time with `compress_and_shrink_recaster` which returns an
+/// // `Arena<P0, P0>` that implements `Recaster`. This recaster maps
+/// // old `Ptr`s to their new indexes.
+/// let recaster = a.compress_and_shrink_recaster();
+///
+/// p_7.recast(&recaster).unwrap();
+/// p_42.recast(&recaster).unwrap();
+///
+/// // now `p_7` and `p_42` work again, however note that we forgot
+/// // to recast the arena itself, this is very important to remember
+/// // if the entries in the arena or whatever map we are using has
+/// // `Item`s in it
+/// assert_eq!(a.get(p_7), Some(&(7, None)));
+/// assert_eq!(a.get(p_42), Some(&(42, Some(old_p_7))));
+///
+/// a.recast(&recaster).unwrap();
+///
+/// assert_eq!(a.get(p_42), Some(&(42, Some(p_7))));
+/// ```
+///
+/// Now for a more advanced example with multiple `Item` types
+///
+/// ```
+/// use triple_arena::{Arena, Ptr, ptr_struct, Recaster, Recast};
+///
+/// // Multiple `Ptr` types. Usually, there needs to be one `Item`
+/// // type per address space that can be recast.
+/// ptr_struct!(P0; Q1);
+///
+/// // An example user structure. Preferably, these things should be
+/// // designed so that all the `Ptr`s are self contained, which
+/// // means that only one top level recast call needs to be made
+/// // to map them all.
 /// #[derive(Debug, PartialEq, Eq)]
 /// struct Entry(u64, Vec<P0>, Q1);
 /// struct Structure {
 ///     p0_arena: Arena<P0, Entry>,
 ///     // some `P0`s that are stored externally to the arena
 ///     external: Vec<P0>,
-///     // an arena that is keyed by `Q1` instead of `P0`
+///     // An arena that is keyed by `Q1` instead of `P0`. If there are
+///     // multiple arenas, `HashMap`s, `BTreeMap`s, or any kind of
+///     // virtual-address-space capable types within the same structure,
+///     // they should each have their own wrapper `Item`s implementing
+///     // `Recast<Self>`. If for some reason there is a need for address
+///     // space duplication, e.g. a `HashSet<P0>` companion to a
+///     // `Arena<P0, ...>`, then the hash set needs to be emptied into a
+///     // new one, with each `P0` recast with the recaster for the
+///     // principle address space.
 ///     q1_arena: Arena<Q1, i32>,
 /// }
 ///
@@ -67,7 +163,7 @@ extern crate alloc;
 ///
 /// // Because we used an external associated type for the `Recast` trait,
 /// // we can `impl` multiple times to be able to recast the same struct
-/// // with recasters with different `Item`s.
+/// // with recasters of different `Item`s.
 /// impl Recast<Q1> for Entry {
 ///     fn recast<R: Recaster<Item = Q1>>(&mut self, recaster: &R)
 ///         -> Result<(), <R as Recaster>::Item> {
@@ -84,25 +180,6 @@ extern crate alloc;
 ///         // `external` has some `P0`s we need to recast so that they
 ///         // agree with elsewhere in the structure.
 ///         self.external.recast(recaster)?;
-///         // This line when uncommented results in an error because
-///         // there is not a `impl Recast<P0> for i32`, and we don't
-///         // need it because there are no `P0`s stored in `q1_arena`.
-///         //self.q1_arena.recast(recaster)?;
-///
-///         // Note that if you have multiple collections with the same
-///         // type of key, you should change it with wrappers to a
-///         // different struct to prevent confusion (in `triple_arena`
-///         // we can use `ptr_struct` to create multiple structs to
-///         // represent different validity spaces of the different
-///         // arenas within the same structure, or otherwise use
-///         // generics to enforce a virtual difference).
-///         // If for some reason the same item absolutely needs to be
-///         // used in keys to more than one collection (e.x. we have
-///         // an `Arena<P0, _>` and an external `HashSet<P0>` that is
-///         // also keyed by `P0`), the recasting impl needs to empty
-///         // all collections except for the collection that the
-///         // `Recaster` is derived from. Then, the keys are recasted
-///         // externally and reinserted, or otherwise regenerated.
 ///         Ok(())
 ///     }
 /// }
@@ -119,23 +196,14 @@ extern crate alloc;
 ///
 /// impl Structure {
 ///     fn recast_q1(&mut self) -> Result<Arena<Q1, Q1>, Q1> {
-///         // for this example we will use the recaster generated from
-///         // `compress_and_shrink_recaster`. This function rekeys
-///         // `q1_arena` and creates a mapping of the old keys to the
-///         // new.
 ///         let recaster = self.q1_arena.compress_and_shrink_recaster();
 ///         // Immediately afterwards, we need to recast all the values.
-///         // If we were to do anything else like call some function
-///         // that tries to index `q1_arena`, the operations would fail
-///         // because all other `Q1`s besides the keys (and just the
-///         // keys, if `q1_arena` had values with `Q1`s in them, they
-///         // would still reflect the old key mapping) are based on the
-///         // old keying. Calling `recast` will fix all that if we
-///         // implemented it correctly.
 ///         self.recast(&recaster)?;
-///         // it is encouraged to have all the relevant `Q1`s self
-///         // contained within `Structure`, but if needed we could also
-///         // return the `recaster` for more external things.
+///         // it is encouraged to have all the relevant `Item`s self
+///         // contained within `Structure` so that only one call is
+///         // needed at the user level, but if needed we could also
+///         // return the `recaster` for recasting things external to
+///         // the structure.
 ///         Ok(recaster)
 ///     }
 ///
@@ -150,6 +218,13 @@ extern crate alloc;
 ///         let recaster = self.p0_arena.compress_and_shrink_recaster();
 ///         self.recast(&recaster)?;
 ///         Ok(recaster)
+///     }
+///
+///     // for preparation before serialization or whatever purpose
+///     // the recasting has
+///     fn compress_and_shrink_all(&mut self) {
+///         self.recast_q1().unwrap();
+///         self.recast_p0().unwrap();
 ///     }
 /// }
 ///
@@ -175,8 +250,9 @@ extern crate alloc;
 /// // need to be recast to be used for the new mapping
 ///
 /// let old_q1_1 = q1_1;
-/// assert!(structure.q1_arena.get(old_q1_1).is_none());
 /// q1_1.recast(&q1_recaster).unwrap();
+///
+/// assert!(structure.q1_arena.get(old_q1_1).is_none());
 /// assert_eq!(structure.q1_arena.get(q1_1), Some(-2).as_ref());
 ///
 /// let old_p0_1 = p0_1;
@@ -184,12 +260,12 @@ extern crate alloc;
 /// p0_1.recast(&p0_recaster).unwrap();
 /// p0_2.recast(&p0_recaster).unwrap();
 ///
+/// // the complicated structure relations and `Ptr` validities
+/// // are preserved despite the `Ptr`s all changing
 /// assert_eq!(
 ///     *structure.p0_arena.get(p0_2).unwrap(),
 ///     Entry(42, vec![p0_1], q1_1)
 /// );
-/// // the structure relations are preserved despite the `Ptr`s
-/// // changing
 /// assert_ne!(old_p0_1, p0_1);
 /// assert_ne!(old_p0_2, p0_2);
 /// assert_ne!(old_q1_1, q1_1);
@@ -212,6 +288,7 @@ pub trait Recast<Item> {
 
 // for working with `Result<(), E>` and such easier
 impl<I> Recast<I> for () {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(
         &mut self,
         _recaster: &R,
@@ -221,6 +298,7 @@ impl<I> Recast<I> for () {
 }
 
 impl<I, T> Recast<I> for PhantomData<T> {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(
         &mut self,
         _recaster: &R,
@@ -233,6 +311,7 @@ macro_rules! impl_self_recast {
     ($($t:ident)*) => {
         $(
             impl Recast<$t> for $t {
+                #[inline]
                 fn recast<R: Recaster<Item = $t>>(&mut self, recaster: &R)
                     -> Result<(), <R as Recaster>::Item> {
                     recaster.recast_item(self)
@@ -249,6 +328,7 @@ impl_self_recast!(
 );
 
 impl<I, T: Recast<I>> Recast<I> for &mut T {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         Recast::recast(*self, recaster)?;
         Ok(())
@@ -256,6 +336,7 @@ impl<I, T: Recast<I>> Recast<I> for &mut T {
 }
 
 impl<I, T: Recast<I>> Recast<I> for core::cell::Cell<T> {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         Recast::recast(self.get_mut(), recaster)?;
         Ok(())
@@ -263,6 +344,7 @@ impl<I, T: Recast<I>> Recast<I> for core::cell::Cell<T> {
 }
 
 impl<I, T: Recast<I>> Recast<I> for core::cell::RefCell<T> {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         Recast::recast(self.get_mut(), recaster)?;
         Ok(())
@@ -271,6 +353,7 @@ impl<I, T: Recast<I>> Recast<I> for core::cell::RefCell<T> {
 
 #[cfg(feature = "alloc")]
 impl<I, T: Recast<I>> Recast<I> for alloc::boxed::Box<T> {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         self.as_mut().recast(recaster)?;
         Ok(())
@@ -279,6 +362,7 @@ impl<I, T: Recast<I>> Recast<I> for alloc::boxed::Box<T> {
 
 #[cfg(feature = "alloc")]
 impl<I, T: Recast<I>> Recast<I> for alloc::rc::Rc<T> {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         Recast::recast(&mut alloc::rc::Rc::get_mut(self), recaster)?;
         Ok(())
@@ -287,6 +371,7 @@ impl<I, T: Recast<I>> Recast<I> for alloc::rc::Rc<T> {
 
 #[cfg(feature = "alloc")]
 impl<I, T: Recast<I>> Recast<I> for alloc::sync::Arc<T> {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         Recast::recast(&mut alloc::sync::Arc::get_mut(self), recaster)?;
         Ok(())
@@ -294,6 +379,7 @@ impl<I, T: Recast<I>> Recast<I> for alloc::sync::Arc<T> {
 }
 
 impl<I, T: Recast<I>> Recast<I> for Option<T> {
+    #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
         if let Some(t) = self {
             t.recast(recaster)?;
@@ -315,6 +401,7 @@ impl<I, T: Recast<I>, E: Recast<I>> Recast<I> for Result<T, E> {
 macro_rules! tuple_recast {
     ($($i:tt $t:tt),+) => {
         impl<Z, $($t: Recast<Z>,)+> Recast<Z> for ($($t,)+) {
+            #[inline]
             fn recast<R: Recaster<Item = Z>>(&mut self, recaster: &R)
                 -> Result<(), <R as Recaster>::Item> {
                 $(
