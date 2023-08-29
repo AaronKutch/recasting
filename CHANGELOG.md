@@ -1,5 +1,9 @@
 
-## [0.2.0] - TODO
+## [0.2.1] - 2023-08-29
+### Changes
+- Moved the `Arc` impl under the "std" flag because `alloc::sync` doesn't always exist
+
+## [0.2.0] - 2023-08-29
 ### Additions
 - Added some missing impls
 
