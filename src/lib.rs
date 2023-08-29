@@ -65,7 +65,7 @@ extern crate alloc;
 /// complexity of the datastructure increases. Here is a version with `Recast`
 ///
 /// ```
-/// use triple_arena::{ptr_struct, Arena, Ptr, Recaster, Recast};
+/// use triple_arena::{ptr_struct, Arena, Ptr, Recast, Recaster};
 /// ptr_struct!(P0);
 ///
 /// // the structs from `ptr_struct` automatically have `Recast<Self>`
@@ -80,8 +80,10 @@ extern crate alloc;
 /// //}
 ///
 /// impl Recast<P0> for (u64, Option<P0>) {
-///     fn recast<R: Recaster<Item = P0>>(&mut self, recaster: &R)
-///         -> Result<(), <R as Recaster>::Item> {
+///     fn recast<R: Recaster<Item = P0>>(
+///         &mut self,
+///         recaster: &R,
+///     ) -> Result<(), <R as Recaster>::Item> {
 ///         // this calls the impl of `Recast` for `Option<T>`, which calls
 ///         // `Recast<Self> for P0`
 ///         self.1.recast(recaster)?;
