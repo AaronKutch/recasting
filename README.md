@@ -7,4 +7,4 @@ any purpose of one-to-one recasting of values.
 Currently, the traits need to be manually implemented, but there should be a macro in a future
 version that will automate implementation.
 
-This crate is no-std by default, but there is a "std" feature for enabling certain impls.
+This crate has "std" and "alloc" features that can be turned off
