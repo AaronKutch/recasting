@@ -380,11 +380,12 @@ impl<I, T: Recast<I>> Recast<I> for alloc::rc::Rc<T> {
     }
 }
 
-#[cfg(feature = "alloc")]
-impl<I, T: Recast<I>> Recast<I> for alloc::sync::Arc<T> {
+// this does exist under `alloc` but not on all platforms
+#[cfg(feature = "std")]
+impl<I, T: Recast<I>> Recast<I> for std::sync::Arc<T> {
     #[inline]
     fn recast<R: Recaster<Item = I>>(&mut self, recaster: &R) -> Result<(), <R as Recaster>::Item> {
-        Recast::recast(&mut alloc::sync::Arc::get_mut(self), recaster)?;
+        Recast::recast(&mut std::sync::Arc::get_mut(self), recaster)?;
         Ok(())
     }
 }
